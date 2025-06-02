@@ -1,9 +1,13 @@
-from typing import Any, Optional, List, Union, Tuple, Literal
+from typing import Any, Optional, List, Union, Tuple, Literal, Sequence
+import warnings as wrn
+
 import pandas as pd
 import numpy as np
+
 from sklearn.base import BaseEstimator, RegressorMixin, clone
 from sklearn.linear_model import ElasticNet
 from sklearn.utils.validation import check_array, check_is_fitted
+
 from joblib import Parallel, delayed
 
 
@@ -26,7 +30,7 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
 
     def __init__(
         self,
-        groupby_cols: List[str],
+        groupby_cols: Sequence[Union[str, int]],
         base_estimator: Optional[Any] = None,
         n_jobs: Optional[int] = -1,
         fallback: Literal["global", "zero"] = 'global'
@@ -34,7 +38,7 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
         if fallback not in ('global', 'zero'):
             raise ValueError("fallback must be either 'global' or 'zero'")
 
-        self.groupby_cols = list(groupby_cols)
+        self.groupby_cols = tuple(groupby_cols)  # to enable cloning and CV
         self.n_jobs = n_jobs
         self.fallback = fallback
 
@@ -46,7 +50,7 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
     def fit(
         self,
         X: pd.DataFrame,
-        y: Union[pd.Series, np.ndarray]
+        y: Sequence[Union[int, float]],
     ) -> "GroupRegressor":
         """
         Fit one estimator per unique group; also fit fallback if requested.
@@ -54,10 +58,11 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
         # Require DataFrame for grouping
         if not isinstance(X, pd.DataFrame):
             raise TypeError("X must be a pandas DataFrame")
-        if isinstance(y, np.ndarray):
+
+        if not isinstance(y, pd.Series):
             y = pd.Series(y, index=X.index)
-        elif not isinstance(y, pd.Series):
-            raise TypeError("y must be a pandas Series or numpy array")
+        elif not X.index.equals(y.index):
+            raise IndexError("y must have same index as X")
 
         # Validate grouping columns
         missing = set(self.groupby_cols) - set(X.columns)
@@ -66,7 +71,8 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
 
         # Identify feature columns
         self._feature_cols = [
-            c for c in X.columns if c not in self.groupby_cols]
+            c for c in X.columns if c not in self.groupby_cols
+            ]
         X_num = X[self._feature_cols]
         # Ensure numeric features
         X_num = check_array(X_num, ensure_2d=True)
@@ -80,12 +86,12 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
         def _fit_group(key: Tuple, df: pd.DataFrame):
             key = key if isinstance(key, tuple) else (key,)  # if one group
             est = clone(self.base_estimator)
-            Xg = df[self._feature_cols].values
-            yg = y.loc[df.index].values
+            Xg = df[self._feature_cols]
+            yg = y.loc[df.index]
             est.fit(Xg, yg)
             return key, est
 
-        groups = list(X.groupby(self.groupby_cols))
+        groups = list(X.groupby(list(self.groupby_cols), observed=True))
         results = Parallel(n_jobs=self.n_jobs)(
             delayed(_fit_group)(key, grp) for key, grp in groups
         )
@@ -116,19 +122,25 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
         )
 
         # Map each row to its estimator
-        for key, df in X.groupby(self.groupby_cols):
+        unseen_keys = []
+        for key, df in X.groupby(list(self.groupby_cols), observed=True):
             idx = df.index
-            norm_key = key if isinstance(key, tuple) else (key,)
-            est = self.estimators_.get(norm_key)
+            key = key if isinstance(key, tuple) else (key,)
+            est = self.estimators_.get(key)
             if est is None:
+                unseen_keys.append(key)
                 if self.fallback == 'global':
                     est = self._global_estimator
                 else:
                     # zero fallback
                     continue
-            Xg = df[self._feature_cols].values
+            Xg = df[self._feature_cols]
             y_pred[idx] = est.predict(Xg)
-        return y_pred.values
+
+        if unseen_keys:
+            wrn.warn(f"Groups unseen in training encountered: {unseen_keys}")
+
+        return y_pred
 
     def get_params(self, deep: bool = True) -> dict:
         """
