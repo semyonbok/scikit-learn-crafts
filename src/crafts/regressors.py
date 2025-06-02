@@ -1,4 +1,4 @@
-from typing import Any, Optional, List, Union, Tuple, Literal, Sequence
+from typing import Optional, Union, Tuple, Literal, Sequence
 import warnings as wrn
 
 import pandas as pd
@@ -31,7 +31,7 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
     def __init__(
         self,
         groupby_cols: Sequence[Union[str, int]],
-        base_estimator: Optional[Any] = None,
+        base_estimator: Optional[BaseEstimator] = None,
         n_jobs: Optional[int] = -1,
         fallback: Literal["global", "zero"] = 'global'
     ):
@@ -91,7 +91,7 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
             est.fit(Xg, yg)
             return key, est
 
-        groups = list(X.groupby(list(self.groupby_cols), observed=True))
+        groups = X.groupby(list(self.groupby_cols), observed=True)
         results = Parallel(n_jobs=self.n_jobs)(
             delayed(_fit_group)(key, grp) for key, grp in groups
         )
@@ -103,7 +103,7 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
     def predict(
         self,
         X: pd.DataFrame
-    ) -> np.ndarray:
+    ) -> pd.Series:
         """
         Predict using group-specific estimators or fallback behavior.
         """
@@ -150,6 +150,7 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
             'groupby_cols': self.groupby_cols,
             'n_jobs': self.n_jobs,
             'fallback': self.fallback,
+            'base_estimator': self.base_estimator,
         }
         if deep:
             for name, val in self.base_estimator.get_params(deep=True).items():
@@ -160,12 +161,34 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
         """
         Set parameters, splitting out base estimator params.
         """
+        valid_params = ["n_jobs", "fallback", "base_estimator"]
         be_params = {}
+
         for key in list(params):
             if key.startswith('base_estimator__'):
                 be_params[key.split('__', 1)[1]] = params.pop(key)
+
         for key, val in params.items():
-            setattr(self, key, val)
+            if key == "groupby_cols":
+                raise ValueError(
+                    f"Setting {key!r} is forbidden. "
+                    "Redefine GroupRegressor instead."
+                )
+            elif not hasattr(self, key):
+                raise ValueError(
+                    f"Invalid parameter {key!r} for estimator {self}. "
+                    f"Valid parameters are: {valid_params!r}."
+                    )
+            else:
+                setattr(self, key, val)
+
+        if "base_estimator" in params.keys():
+            wrn.warn(
+                "'base_estimator' was reset. To take effect, "
+                "GroupRegressor must be refit."
+                )
+
         if be_params:
             self.base_estimator.set_params(**be_params)
+
         return self
