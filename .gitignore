@@ -1,1 +1,6 @@
 __pycache__
+.mypy_cache
+.pytest_cache
+.vscode
+*.ipynb
+*.egg-info
