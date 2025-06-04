@@ -35,8 +35,7 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
         n_jobs: Optional[int] = -1,
         fallback: Literal["global", "zero"] = 'global'
     ):
-        if fallback not in ('global', 'zero'):
-            raise ValueError("fallback must be either 'global' or 'zero'")
+        self._check_fallback(fallback)
 
         self.groupby_cols = tuple(groupby_cols)  # to enable cloning and CV
         self.n_jobs = n_jobs
@@ -46,6 +45,13 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
             self.base_estimator = ElasticNet()
         else:
             self.base_estimator = base_estimator
+        
+        # needed to allow param setting when not fitted.
+        self.__fitted = False
+
+    def _check_fallback(self, fallback):
+        if fallback not in ('global', 'zero'):
+            raise ValueError("fallback must be either 'global' or 'zero'")
 
     def fit(
         self,
@@ -98,6 +104,8 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
 
         self.estimators_ = {key: est for key, est in results}
         self.n_features_in_ = len(self._feature_cols)
+        self.__fitted = True
+
         return self
 
     def predict(
@@ -161,6 +169,12 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
         """
         Set parameters, splitting out base estimator params.
         """
+        if "groupby_cols" in params.keys():
+            params["groupby_cols"] = tuple(params["groupby_cols"] )
+
+        if "fallback" in params.keys():
+            self._check_fallback(params["fallback"])
+
         valid_params = ["n_jobs", "fallback", "base_estimator"]
         be_params = {}
 
@@ -169,10 +183,10 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
                 be_params[key.split('__', 1)[1]] = params.pop(key)
 
         for key, val in params.items():
-            if key == "groupby_cols":
+            if (key == "groupby_cols") and self.__fitted:
                 raise ValueError(
-                    f"Setting {key!r} is forbidden. "
-                    "Redefine GroupRegressor instead."
+                    f"Setting {key!r} is forbidden when GroupRegressor is"
+                    " fitted. Redefine GroupRegressor instead."
                 )
             elif not hasattr(self, key):
                 raise ValueError(
@@ -182,12 +196,12 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
             else:
                 setattr(self, key, val)
 
-        if "base_estimator" in params.keys():
+        if ("base_estimator" in params.keys()) and self.__fitted:
             wrn.warn(
                 "'base_estimator' was reset. To take effect, "
                 "GroupRegressor must be refit."
                 )
-
+        
         if be_params:
             self.base_estimator.set_params(**be_params)
 
