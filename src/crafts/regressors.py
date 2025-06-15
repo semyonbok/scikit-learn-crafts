@@ -1,4 +1,7 @@
-from typing import Optional, Union, Tuple, Literal, Sequence, Hashable
+from typing import (
+    Optional, Union, Tuple, Literal, Sequence, Hashable, Any,
+    Protocol, TypeVar, runtime_checkable
+)
 import warnings as wrn
 
 import pandas as pd
@@ -9,6 +12,24 @@ from sklearn.linear_model import ElasticNet
 from sklearn.utils.validation import check_array, check_is_fitted
 
 from joblib import Parallel, delayed
+
+
+T = TypeVar('T', bound='RegressorProtocol')
+
+
+@runtime_checkable
+class RegressorProtocol(Protocol):
+    def fit(self: T, X: pd.DataFrame, y: pd.Series) -> T:
+        ...
+
+    def predict(self, X: pd.DataFrame) -> Sequence[float]:
+        ...
+
+    def get_params(self, deep: bool = True) -> dict[str, Any]:
+        ...
+
+    def set_params(self: T, **params: Any) -> T:
+        ...
 
 
 class GroupRegressor(BaseEstimator, RegressorMixin):
@@ -40,7 +61,7 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
     def __init__(
         self,
         groupby_cols: Sequence[Hashable],
-        base_estimator: Optional[BaseEstimator] = None,
+        base_estimator: Optional[RegressorProtocol] = None,
         n_jobs: Optional[int] = -1,
         fallback: Literal["global", "zero"] = "global",
     ):
@@ -69,6 +90,7 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
         if base_estimator is None:
             self.base_estimator = ElasticNet()
         else:
+            self._validate_base_estimator(base_estimator)
             self.base_estimator = base_estimator
 
     def _validate_fallback(self, fallback):
@@ -81,6 +103,12 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
         missing = set(groupby_cols) - set(X.columns)
         if missing:
             raise KeyError(f"Missing grouping columns in X: {missing}")
+
+    def _validate_base_estimator(self, base_estimator):
+        if not isinstance(base_estimator, RegressorProtocol):
+            raise TypeError(
+                "base_estimator must have fit, predict, set/get_params methods"
+            )
 
     def fit(
         self,
@@ -287,6 +315,9 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
 
         if "fallback" in params.keys():
             self._validate_fallback(params["fallback"])
+
+        if "base_estimator" in params.keys():
+            self._validate_base_estimator(params["base_estimator"])
 
         be_params = {}
         for key in list(params):
