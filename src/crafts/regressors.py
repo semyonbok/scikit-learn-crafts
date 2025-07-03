@@ -10,7 +10,7 @@ import numpy as np
 from sklearn.base import BaseEstimator, RegressorMixin, clone
 from sklearn.ensemble import BaggingRegressor
 from sklearn.linear_model import ElasticNet
-from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
+from sklearn.utils.validation import check_array, check_is_fitted
 
 from joblib import Parallel, delayed
 
@@ -355,33 +355,28 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
 
 class PredictionIntervalRegressor(BaggingRegressor):
     """"""
-
     def fit(self, X, y, sample_weight=None, **fit_params):
         super().fit(X, y, sample_weight=sample_weight, **fit_params)
         # create a pool of residuals for each sub-estimator
-        X, y = check_X_y(X, y)  # <- `estimators_` are trained on arrays
-        # TODO parallelize this
-        self.residuals_ = []
-        for estimator in self.estimators_:
-            y_pred = estimator.predict(X)
-            self.residuals_.append(y_pred - y)
+        estimator = clone(self.estimator_)
+        estimator.fit(X, y)
+        y_pred = estimator.predict(X)
+        self.residuals_ = y - y_pred
+        return self
 
     def predict_quantiles(self, X, quantiles, **params):
         check_is_fitted(self, "estimators_")
-        X = check_array(X)
+        X = check_array(X, ensure_all_finite="allow-nan", dtype=None)
         rng = np.random.default_rng(self.random_state)
         # TODO parallelize this
         y_preds = []
-        for i, estimator in enumerate(self.estimators_):
+        for estimator in self.estimators_:
             y_pred = estimator.predict(X)
-            resids = self.residuals_[i]
-            y_pred += rng.choice(resids, len(y_pred), replace=True)
+            y_pred += rng.choice(self.residuals_, len(y_pred), replace=True)
             y_preds.append(y_pred)
-            rng.normal
 
-        # shape (m, n): m samples, n estimators
-        y_preds = np.asarray(y_preds).T
-        return np.quantile(y_preds, quantiles, axis=1)
+        y_preds = np.asarray(y_preds)  # shape (n, m): n estimators, m samples
+        return np.quantile(y_preds, quantiles, axis=0).T  # shape (m, q)
 
     def coverage_fraction(self, y, y_low, y_high):
         """Taken from Prediction Intervals for Gradient Boosting Regression
