@@ -364,19 +364,53 @@ class PredictionIntervalRegressor(BaggingRegressor):
         self.residuals_ = y - y_pred
         return self
 
-    def predict_quantiles(self, X, quantiles, **params):
-        check_is_fitted(self, "estimators_")
+    @staticmethod
+    def _predict_with_residuals(estimator, X, residuals, seed):
+        """Predict + add one bootstrap residual draw (seeded)."""
+        rng = np.random.default_rng(seed)
+        y_pred = estimator.predict(X)
+        resids = rng.choice(residuals, len(y_pred), replace=True)
+        return y_pred + resids
+
+    def predict_quantiles(self, X, q, return_sims=False):
+        """
+        Compute prediction intervals by bootstrapping residuals over bagged
+        estimators.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            New data on which to predict.
+        q : array-like of float in [0, 1]
+            Quantile levels to estimate (e.g., [0.025, 0.975]).
+        return_sims : bool, default=False
+            If True, also return the full simulated predictions matrix
+            of shape (n_estimators, n_samples).
+
+        Returns
+        -------
+        quantiles : ndarray of shape (n_samples, len(q))
+            Estimated quantiles for each sample in X.
+        sims : ndarray of shape (n_estimators, n_samples), optional
+            Simulated predictions used to compute quantiles (only returned
+            if `return_sims=True`).
+        """
+        check_is_fitted(self, ["estimators_", "residuals_"])
         X = check_array(X, ensure_all_finite="allow-nan", dtype=None)
         rng = np.random.default_rng(self.random_state)
-        # TODO parallelize this
-        y_preds = []
-        for estimator in self.estimators_:
-            y_pred = estimator.predict(X)
-            y_pred += rng.choice(self.residuals_, len(y_pred), replace=True)
-            y_preds.append(y_pred)
+        seeds = rng.integers(0, 2**32 - 1, size=len(self.estimators_))
 
-        y_preds = np.asarray(y_preds)  # shape (n, m): n estimators, m samples
-        return np.quantile(y_preds, quantiles, axis=0).T  # shape (m, q)
+        sims = Parallel(n_jobs=self.n_jobs)(
+            delayed(self._predict_with_residuals)(e, X, self.residuals_, s)
+            for e, s in zip(self.estimators_, seeds)
+        )
+
+        sims = np.asarray(sims)  # shape (n, m): n estimators, m samples
+        quantiles = np.quantile(sims, q, axis=0).T  # shape (m, len(q))
+
+        if return_sims:
+            return quantiles, sims
+        return quantiles
 
     def coverage_fraction(self, y, y_low, y_high):
         """Taken from Prediction Intervals for Gradient Boosting Regression
