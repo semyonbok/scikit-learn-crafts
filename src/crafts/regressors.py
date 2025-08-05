@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 
 from sklearn.base import BaseEstimator, RegressorMixin, clone
+from sklearn.ensemble import BaggingRegressor
 from sklearn.linear_model import ElasticNet
 from sklearn.utils.validation import check_array, check_is_fitted
 
@@ -350,3 +351,124 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
             self.base_estimator.set_params(**be_params)
 
         return self
+
+
+class PredictionIntervalRegressor(BaggingRegressor):
+    """
+    A BaggingRegressor extension that produces bootstrap-based prediction
+    intervals by sampling residuals from an "original" model fit on the full
+    dataset.
+
+    Attributes
+    ----------
+    residuals_ : ndarray of shape (n_samples,)
+        Residuals from the "original" estimator trained on the full dataset.
+
+    Methods
+    -------
+    fit(X, y, sample_weight=None, **fit_params)
+        Fit the bagged ensemble, then fit a single base estimator on the full
+        dataset and compute its residuals for the bootstrap pool.
+
+    _predict_with_residuals(estimator, X, residuals, seed)
+        Static helper that predicts with one sub-estimator, then adds a single
+        bootstrap-sampled residual draw using the given seed.
+
+    predict_quantiles(X, q, return_sims=False)
+        For each sub-estimator, predict on X, add a sampled residual, and
+        aggregate across estimators to return the requested quantiles per
+        sample. If return_sims, also return full simulated predictions matrix.
+
+    coverage_fraction(y_true, y_lower, y_upper)
+        Compute the fraction of true target values y_true that lie within the
+        interval [y_lower, y_upper].
+
+    References
+    ----------
+    Bruce, P., Bruce, A., & Gedeck, P. (2020). Practical Statistics for Data
+    Scientists, Chapter 4. O'Reilly Media. ISBN 978-1-492-07294-2.
+    """
+
+    def fit(self, X, y, sample_weight=None, **fit_params):
+        """
+        Fit `BaggingRegressor` and compute the residual pool.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Training input samples.
+        y : array-like of shape (n_samples,)
+            Target values.
+        sample_weight : array-like of shape (n_samples,), optional
+            Individual weights for each training sample. Default is None.
+        **fit_params :
+            Additional keyword arguments passed to each base estimator.
+
+        Returns
+        -------
+        self : PredictionIntervalRegressor
+            Fitted estimator with one additional attribute to parent class:
+            - residuals_ : ndarray of shape (n_samples,)
+            Residuals from a base estimator trained on the full dataset.
+        """
+        super().fit(X, y, sample_weight=sample_weight, **fit_params)
+        estimator = clone(self.estimator_)
+        estimator.fit(X, y)
+        y_pred = estimator.predict(X)
+        self.residuals_ = y - y_pred
+        return self
+
+    @staticmethod
+    def _predict_with_residuals(estimator, X, residuals, seed):
+        """Predict + add one bootstrap residual draw (seeded)."""
+        rng = np.random.default_rng(seed)
+        y_pred = estimator.predict(X)
+        resids = rng.choice(residuals, len(y_pred), replace=True)
+        return y_pred + resids
+
+    def predict_quantiles(self, X, q, return_sims=False):
+        """
+        Compute prediction intervals by bootstrapping residuals over bagged
+        estimators.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            New data on which to predict.
+        q : array-like of float in [0, 1]
+            Quantile levels to estimate (e.g., [0.025, 0.975]).
+        return_sims : bool, default=False
+            If True, also return the full simulated predictions matrix
+            of shape (n_samples, n_estimators).
+
+        Returns
+        -------
+        quantiles : ndarray of shape (n_samples, len(q))
+            Estimated quantiles for each sample in X.
+        sims : ndarray of shape (n_estimators, n_samples), optional
+            Simulated predictions used to compute quantiles (only returned
+            if `return_sims=True`).
+        """
+        check_is_fitted(self, ["estimators_", "residuals_"])
+        X = check_array(X, ensure_all_finite="allow-nan", dtype=None)
+        rng = np.random.default_rng(self.random_state)
+        seeds = rng.integers(0, 2**32 - 1, size=len(self.estimators_))
+
+        sims = Parallel(n_jobs=self.n_jobs)(
+            delayed(self._predict_with_residuals)(e, X, self.residuals_, s)
+            for e, s in zip(self.estimators_, seeds)
+        )
+
+        sims = np.asarray(sims)  # shape (n, m): n estimators, m samples
+        quantiles = np.quantile(sims, q, axis=0).T  # shape (m, len(q))
+
+        if return_sims:
+            return quantiles, sims.T
+        return quantiles
+
+    def coverage_fraction(self, y, y_low, y_high):
+        """Taken from Prediction Intervals for Gradient Boosting Regression
+        Example at https://scikit-learn.org/stable/auto_examples/index.html"""
+        return np.mean(
+            np.logical_and(y >= y_low, y <= y_high)
+        )
