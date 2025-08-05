@@ -354,10 +354,64 @@ class GroupRegressor(BaseEstimator, RegressorMixin):
 
 
 class PredictionIntervalRegressor(BaggingRegressor):
-    """"""
+    """
+    A BaggingRegressor extension that produces bootstrap-based prediction
+    intervals by sampling residuals from an "original" model fit on the full
+    dataset.
+
+    Attributes
+    ----------
+    residuals_ : ndarray of shape (n_samples,)
+        Residuals from the "original" estimator trained on the full dataset.
+
+    Methods
+    -------
+    fit(X, y, sample_weight=None, **fit_params)
+        Fit the bagged ensemble, then fit a single base estimator on the full
+        dataset and compute its residuals for the bootstrap pool.
+
+    _predict_with_residuals(estimator, X, residuals, seed)
+        Static helper that predicts with one sub-estimator, then adds a single
+        bootstrap-sampled residual draw using the given seed.
+
+    predict_quantiles(X, q, return_sims=False)
+        For each sub-estimator, predict on X, add a sampled residual, and
+        aggregate across estimators to return the requested quantiles per
+        sample. If return_sims, also return full simulated predictions matrix.
+
+    coverage_fraction(y_true, y_lower, y_upper)
+        Compute the fraction of true target values y_true that lie within the
+        interval [y_lower, y_upper].
+
+    References
+    ----------
+    Bruce, P., Bruce, A., & Gedeck, P. (2020). Practical Statistics for Data
+    Scientists, Chapter 4. O'Reilly Media. ISBN 978-1-492-07294-2.
+    """
+
     def fit(self, X, y, sample_weight=None, **fit_params):
+        """
+        Fit `BaggingRegressor` and compute the residual pool.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Training input samples.
+        y : array-like of shape (n_samples,)
+            Target values.
+        sample_weight : array-like of shape (n_samples,), optional
+            Individual weights for each training sample. Default is None.
+        **fit_params :
+            Additional keyword arguments passed to each base estimator.
+
+        Returns
+        -------
+        self : PredictionIntervalRegressor
+            Fitted estimator with one additional attribute to parent class:
+            - residuals_ : ndarray of shape (n_samples,)
+            Residuals from a base estimator trained on the full dataset.
+        """
         super().fit(X, y, sample_weight=sample_weight, **fit_params)
-        # create a pool of residuals for each sub-estimator
         estimator = clone(self.estimator_)
         estimator.fit(X, y)
         y_pred = estimator.predict(X)
@@ -385,7 +439,7 @@ class PredictionIntervalRegressor(BaggingRegressor):
             Quantile levels to estimate (e.g., [0.025, 0.975]).
         return_sims : bool, default=False
             If True, also return the full simulated predictions matrix
-            of shape (n_estimators, n_samples).
+            of shape (n_samples, n_estimators).
 
         Returns
         -------
@@ -409,10 +463,12 @@ class PredictionIntervalRegressor(BaggingRegressor):
         quantiles = np.quantile(sims, q, axis=0).T  # shape (m, len(q))
 
         if return_sims:
-            return quantiles, sims
+            return quantiles, sims.T
         return quantiles
 
     def coverage_fraction(self, y, y_low, y_high):
         """Taken from Prediction Intervals for Gradient Boosting Regression
         Example at https://scikit-learn.org/stable/auto_examples/index.html"""
-        return np.mean(np.logical_and(y >= y_low, y <= y_high))
+        return np.mean(
+            np.logical_and(y >= y_low, y <= y_high)
+        )
