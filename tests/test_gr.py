@@ -82,6 +82,12 @@ def test_set_base_estimator(get_regressor):
     assert isinstance(gr.base_estimator, DecisionTreeRegressor)
 
 
+def test_set_base_estimator_invalid(get_regressor):
+    gr = get_regressor
+    with pytest.raises(TypeError):
+        gr.set_params(base_estimator="ops")
+
+
 def test_set_base_estimator_when_fitted(get_regressor):
     gr = get_regressor
     gr.estimators_ = {}
@@ -112,9 +118,10 @@ def test_set_fallback_invalid(get_regressor):
         gr.set_params(fallback="fall what?")
 
 
-@pytest.mark.skip(reason="Not yet implemented")
 def test_set_be_params():
-    pass
+    gr = get_regressor
+    gr.set_params(base_estimator__alpha=.5)
+    assert gr.base_estimator.get_params()["alpha"] == pytest.approx(.5)
 
 
 @pytest.mark.parametrize("n_jobs", (None, 1, 2, -1))
