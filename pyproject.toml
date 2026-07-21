@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mlcrafts"
+dynamic = ["version"]
+description = "Custom scikit-learn objects"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+    { name = "semyonbok" },
+]
+dependencies = [
+    "joblib",
+    "numpy",
+    "optuna",
+    "pandas",
+    "scikit-learn",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "mlcrafts.version.__version__" }

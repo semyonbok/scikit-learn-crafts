@@ -8,7 +8,7 @@ from sklearn.linear_model import ElasticNet
 from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeRegressor
 
-from crafts.regressors import GroupRegressor
+from mlcrafts.regressors import GroupRegressor
 
 RS = 17_17_17_17_17
 GROUPBY_COLS = ['sex', 'age_group']
@@ -118,7 +118,7 @@ def test_set_fallback_invalid(get_regressor):
         gr.set_params(fallback="fall what?")
 
 
-def test_set_be_params():
+def test_set_be_params(get_regressor):
     gr = get_regressor
     gr.set_params(base_estimator__alpha=.5)
     assert gr.base_estimator.get_params()["alpha"] == pytest.approx(.5)

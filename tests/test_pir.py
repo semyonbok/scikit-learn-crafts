@@ -5,7 +5,7 @@ from sklearn.ensemble import HistGradientBoostingRegressor, BaggingRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.utils.estimator_checks import check_estimator
 
-from crafts.regressors import PredictionIntervalRegressor
+from mlcrafts.regressors import PredictionIntervalRegressor
 
 RS = 17_17_17_17_17
 
